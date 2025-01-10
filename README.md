@@ -54,7 +54,7 @@ ratio_account = 2.0
 - **period_reload** - интервал опроса состояния счетов в секундах
 - **ratio_account** - коэффициент объема совершаемых сделок
 
-[Подробнее о токенах доступа для работы с TINKOFF INVEST API](https://tinkoff.github.io/investAPI/token/)
+[Подробнее о токенах доступа для работы с TINKOFF INVEST API](https://tinkoff.github.io/investAPI/token/)  
 [Подробнее о токенах доступа для работы с FINAM API](https://github.com/cia76/FinamPy/blob/master/Config.py)
 
 **!!!ВНИМАНИЕ!!!** Не публикуйте в публичных репозиториях значения токенов доступа и не передавайте их посторонним лицам!  

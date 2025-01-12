@@ -163,6 +163,8 @@ cython_debug/
 
 # Data files
 *.csv
+*.xls
+*.xlsx
 *.rar
 *.zip
 

@@ -1,4 +1,4 @@
-'''Автоматическое повторение сделок у брокера Т-Банк'''
+'''Автоматическое повторение сделок у брокера Т-Банк на целевой счет брокера Финам'''
 import os
 from dotenv import load_dotenv
 import pandas as pd
@@ -12,6 +12,12 @@ from tinkoff.invest import OrderExecutionReportStatus, OrderType, OrderDirection
 from tinkoff.invest.services import InstrumentsService
 from tinkoff.invest.utils import quotation_to_decimal
 
+from FinamPy import FinamPy
+from finam_trade_api.client import Client as ClientFinam
+
+# Отключение WARNING
+import warnings
+warnings.filterwarnings("ignore")
 
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
 if os.path.exists(dotenv_path):
@@ -19,6 +25,7 @@ if os.path.exists(dotenv_path):
 # Получение токенов из конфигурационного файла
 TOKEN_SOURCE = os.environ["TOKEN_SOURCE"]
 TOKEN_TARGET = os.environ["TOKEN_TARGET"]
+CLIENTID = os.environ["CLIENTID"]
 # Период обновления сравнения
 period_reload = int(os.environ["period_reload"])
 # Коэффициент пересчета размера позиций
@@ -28,12 +35,15 @@ clr_command = 'cls' if platform.system() == 'Windows' else 'clear'
 
 def main():
     # Подключение к счетам
-    with Client(TOKEN_SOURCE) as client_source, Client(TOKEN_TARGET) as client_target:
-        # Получение ссылок на счета
+    with Client(TOKEN_SOURCE) as client_source:
+        client_target = FinamPy(TOKEN_TARGET)
+        # Получение ссылки на счет Тинькофф
         account_source = client_source.users.get_accounts().accounts[0]
-        account_target = client_target.users.get_accounts().accounts[0]
+        # Получение ссылки на счет Тинькофф
+        account_target = CLIENTID
+         
         # Получение словаря инструментов figi-name
-        instruments: InstrumentsService = client_target.instruments
+        instruments: InstrumentsService = client_source.instruments
         tickers = []
         for method in ["shares", "bonds", "etfs", "currencies", "futures"]:
             for item in getattr(instruments, method)().instruments:
@@ -77,18 +87,20 @@ def main():
             df_account_source.drop(df_account_source.index, inplace=True)
             df_account_target.drop(df_account_source.index, inplace=True)
             # Заполнение текущими данными
-            df_account_source = position_to_dataframe(client_source, 
-                                                      account_source,
-                                                      df_dict_instr)
-            df_account_target = position_to_dataframe(client_target, 
-                                                      account_target,
-                                                      df_dict_instr)
+            df_account_source = position_to_dataframe_Tinkoff(client_source, 
+                                                              account_source,
+                                                              df_dict_instr)
+            df_account_target = position_to_dataframe_Finam(client_target, 
+                                                            account_target,
+                                                            df_dict_instr)
             # Сравнение исходного и целевого счетов и вычисление разницы
             df_for_buy, df_for_sell = get_account_difference(df_account_source,
                                                              df_account_target,
                                                              ratio_account,
                                                              df_dict_instr)
-            # Выполнение заданий на покупку/продажу по рынку
+            df_not_sell = pd.DataFrame()
+            df_not_buy = pd.DataFrame()
+            '''# Выполнение заданий на покупку/продажу по рынку
             df_not_sell = start_deal_tasks(client_target,
                                            account_target,
                                            df_for_sell,
@@ -97,7 +109,7 @@ def main():
             df_not_buy = start_deal_tasks(client_target,
                                           account_target,
                                           df_for_buy,
-                                          True)
+                                          True)'''
             # Если есть невыполненные задания на покупку/продажу - вывод на экран
             if not was_printing \
                or (df_not_buy.shape[0] > 0 or df_not_sell.shape[0] > 0) \
@@ -105,7 +117,7 @@ def main():
                 was_printing = True
                 # Очистка экрана
                 os.system(clr_command)
-                print('Исходный', '='*70)
+                print('Исходный', '='*71)
                 print(df_account_source.sort_values(by=['Тип актива', 'Наименование'], ignore_index=True))
                 print('Целевой', '='*72)
                 print(df_account_target.sort_values(by=['Тип актива', 'Наименование'], ignore_index=True))
@@ -113,14 +125,19 @@ def main():
                 print(df_not_buy if not df_not_buy.empty else 'отсутствуют')
                 print('Невыполненные задания на продажу', '='*47)
                 print(df_not_sell if not df_not_sell.empty else 'отсутствуют')
+                print('='*80)
+                print('Задания на покупку', '='*61)
+                print(df_for_buy if not df_for_buy.empty else 'отсутствуют')
+                print('Задания на продажу', '='*61)
+                print(df_for_sell if not df_for_sell.empty else 'отсутствуют')
             # Ожидание
             time.sleep(period_reload)
 
 
-def position_to_dataframe(client: Client, 
-                          account: Account, 
-                          df_dict_instr: pd.DataFrame) -> pd.DataFrame:
-    ''' Функция получения списка открытых позиций, данные возвращаются 
+def position_to_dataframe_Tinkoff(client: Client, 
+                                  account: Account, 
+                                  df_dict_instr: pd.DataFrame) -> pd.DataFrame:
+    ''' Функция получения списка открытых позиций Тинькофф, данные возвращаются 
         в формате pandas.DataFrame.
        
        Args:
@@ -163,6 +180,69 @@ def position_to_dataframe(client: Client,
     return df_account
 
 
+def position_to_dataframe_Finam(client: FinamPy, 
+                                account: str, 
+                                df_dict_instr: pd.DataFrame) -> pd.DataFrame:
+    ''' Функция получения списка открытых позиций Финам, данные возвращаются 
+        в формате pandas.DataFrame.
+       
+       Args:
+        client (FinamPy):   клиент подключения FINAM API.
+        account (str): счет FINAM API.
+        df_dict_instr (dict): словарь инструментов
+
+        Returns:
+            pd.DataFrame: список открытых позиций
+    '''
+
+    df_account = pd.DataFrame(columns=['id', 'Наименование', 'Количество', 'Тип актива'])
+    # Получение позиций
+    portfolio = client.get_portfolio(account)  # Получаем портфель
+    if not portfolio:
+        print('NOT PORTFOLIO FROM FINAM!!!')
+        time.sleep(3)
+        raise ValueError("Не получена информация от Финама...")
+    else:
+        # Заполнение DataFrame исходного счета
+        # Внесение валютных позиций
+        for pos in portfolio.currencies:
+            df_account = pd.concat([df_account,
+                                    pd.DataFrame({'id': [pos.name],
+                                                  'Наименование': [df_dict_instr['name'].get(pos.name, pos.name)],
+                                                  'Количество': [pos.balance],
+                                                  'Тип актива': ['Валюта']})],
+                                    ignore_index=True)
+        # Внесение позиций DEPO
+        for pos in portfolio.positions:
+            res = df_dict_instr[df_dict_instr['ticker'] == pos.security_code]
+            if res.shape[0] == 1:
+                df_account = pd.concat([df_account,
+                                        pd.DataFrame({'id': [res.index[0]],
+                                                      'Наименование': [res['name'].iloc[0]],
+                                                      'Количество': [pos.balance],
+                                                      'Тип актива': [res['type'].iloc[0]]})],
+                                        ignore_index=True)
+            # Финам не позволяет получить figi инструмента, 
+            # а в словаре от Тинькофф-а имеются дубликаты по тикерам инструментов, 
+            # в дубликатах фигурирует различные разделы MOEX и unknown, исключаем unknown
+            elif res.shape[0] == 2:
+                df_account = pd.concat([df_account,
+                                        pd.DataFrame({'id': [res[res['exchange'] != 'unknown'].index[0]],
+                                                      'Наименование': [res[res['exchange'] != 'unknown']['name'].iloc[0]],
+                                                      'Количество': [pos.balance],
+                                                      'Тип актива': [res[res['exchange'] != 'unknown']['type'].iloc[0]]})],
+                                        ignore_index=True)
+            # Если инструмент отсутствует в Тинькофф, закрыть позицию самостоятельно
+            else:
+                df_account = pd.concat([df_account,
+                                        pd.DataFrame({'id': [pos.security_code],
+                                                      'Наименование': ['НЕ НАЙДЕНО'],
+                                                      'Количество': [pos.balance],
+                                                      'Тип актива': ['НЕ НАЙДЕНО']})],
+                                        ignore_index=True)
+    return df_account
+
+
 def get_account_difference(df_account_source: pd.DataFrame, 
                            df_account_target: pd.DataFrame, 
                            ratio_account: float, 
@@ -187,7 +267,7 @@ def get_account_difference(df_account_source: pd.DataFrame,
     df_for_sell = pd.DataFrame(columns=['id', 'Количество лотов', 'Тип актива'])
     # Удаляем из аккаунтов rub
     df_account_source = df_account_source.drop(df_account_source[df_account_source['id'] == 'rub'].index.tolist(), axis=0)
-    df_account_target = df_account_target.drop(df_account_target[df_account_target['id'] == 'rub'].index.tolist(), axis=0)
+    df_account_target = df_account_target.drop(df_account_target[df_account_target['id'] == 'RUB'].index.tolist(), axis=0)
     # Переводим количество активов в количество лотов
     df_account_source['Количество'] = df_account_source['Количество']//df_account_source['id'].map(df_dict_instr['lot'])
     df_account_target['Количество'] = df_account_target['Количество']//df_account_target['id'].map(df_dict_instr['lot'])
@@ -238,16 +318,16 @@ def get_account_difference(df_account_source: pd.DataFrame,
     return (df_for_buy, df_for_sell)
     
     
-def start_deal_tasks(client: Client, 
-                     account: Account,
+def start_deal_tasks(client: FinamPy,
+                     account: str,
                      df_for_deal: pd.DataFrame,
                      buy_sell: bool) -> pd.DataFrame:
     ''' Функция исполнения заданий на покупку/продажу, возвращается
         список неисполненных заданий в формате pandas.DataFrame.
        
        Args:
-        client (tinkoff.invest.Client):   клиент подключения TINKOFF INVEST API.
-        account (tinkoff.invest.Account): счет TINKOFF INVEST API.
+        client (FinamPy):   клиент подключения Finam API.
+        account (str): счет Finam.
         df_for_deal (pd.DataFrame): задания на покупку
         buy_sell (bool): задания на продажу
 
@@ -256,7 +336,7 @@ def start_deal_tasks(client: Client,
     '''
     
     df_not_deal = pd.DataFrame(columns=['id', 'Количество лотов', 'Сообщение'])
-    # Продажа
+    # Сделка
     for i in df_for_deal.index.to_list():
         # Получение статуса торговли инструментом, 
         # доступности исполнения заявки по рынку
@@ -309,4 +389,5 @@ if __name__ == "__main__":
                 print('Работа скрипта остановлена...')
                 break
         except Exception:
+            time.sleep(1)
             continue
